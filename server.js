@@ -124,7 +124,7 @@ app.get('/_proxy/polyfills.js', (req, res) => {
     }
     
     // Strip ES6 export statements to prevent SyntaxError in browsers that don't support ES modules
-    combined = combined.replace(/\bexport\s+\{[^}]+\};?/g, '');
+    combined = combined.replace(/\bexport\s*\{[^}]+\};?/g, '');
     combined = combined.replace(/\bexport\s+default\s+[\w\d_]+;?/g, '');
     
     // Inject custom fixes for webOS 2.2.0 compatibility
@@ -148,6 +148,7 @@ app.all('*', async (req, res) => {
   if (req.path === '/_proxy/polyfills.js' || req.path === '/_proxy/log') return;
 
   const targetUrl = TABII_ORIGIN + req.url;
+  console.log(`[REQUEST] ${req.method} ${req.url}`);
   
   // Setup headers for tabii.com
   const headers = { ...req.headers };

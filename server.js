@@ -387,16 +387,19 @@ app.post('/activate', (req, res) => {
 });
 
 // tabii API Proxy
-app.all('/apigateway/*', async (req, res) => {
-  const pathAfterApi = req.path.replace(/^\/apigateway/, '');
-  const targetUrl = 'https://eu1.tabii.com/apigateway' + pathAfterApi + (req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '');
+app.all('/eu1/*', async (req, res) => {
+  const pathAfterEu1 = req.path.replace(/^\/eu1/, '');
+  const targetUrl = 'https://eu1.tabii.com' + pathAfterEu1 + (req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '');
   
   // Forward request headers
   const headers = { ...req.headers };
   headers['host'] = 'eu1.tabii.com';
   headers['origin'] = 'https://www.tabii.com';
   headers['referer'] = 'https://www.tabii.com/';
-  delete headers['cookie'];
+  headers['user-agent'] = PC_USER_AGENT;
+  if (headers['cookie']) {
+    headers['cookie'] = headers['cookie'].split(';').filter(c => !c.trim().startsWith('proxy_session_id=')).join(';');
+  }
   
   const requestConfig = {
     method: req.method,
@@ -411,7 +414,7 @@ app.all('/apigateway/*', async (req, res) => {
     const response = await axios(requestConfig);
     
     // Intercept login to store token
-    if (req.path === '/apigateway/auth/v2/login' && response.status === 200 && response.data) {
+    if (req.path === '/eu1/apigateway/auth/v2/login' && response.status === 200 && response.data) {
       const loginData = response.data;
       if (loginData.accessToken) {
         console.log('[API PROXY] Intercepted successful login!');
@@ -524,7 +527,7 @@ app.all('*', async (req, res) => {
       let html = response.data.toString('utf8');
       
       const proxyOrigin = (req.headers['x-forwarded-proto'] || req.protocol) + '://' + req.headers.host;
-      html = html.replace(/"basePath"\s*:\s*"https:\/\/eu1\.tabii\.com\/apigateway"/g, `"basePath":"${proxyOrigin}/apigateway"`);
+      html = html.replace(/https:\/\/eu1\.tabii\.com/g, `${proxyOrigin}/eu1`);
       
       const polyfillScript = '<script src="/_proxy/polyfills.js"></script>';
       if (html.includes('<head>')) {
@@ -535,6 +538,12 @@ app.all('*', async (req, res) => {
       
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.send(html);
+    } else if (contentType.includes('javascript') || contentType.includes('application/x-javascript') || req.path.endsWith('.js')) {
+      let jsContent = response.data.toString('utf8');
+      const proxyOrigin = (req.headers['x-forwarded-proto'] || req.protocol) + '://' + req.headers.host;
+      jsContent = jsContent.replace(/https:\/\/eu1\.tabii\.com/g, `${proxyOrigin}/eu1`);
+      res.setHeader('Content-Type', contentType || 'application/javascript; charset=utf-8');
+      return res.send(jsContent);
     }
 
     return res.send(response.data);

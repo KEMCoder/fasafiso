@@ -449,9 +449,11 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
     
     res.status(response.status);
     Object.entries(response.headers).forEach(([key, val]) => {
-      if (key.toLowerCase() !== 'content-length' && 
-          key.toLowerCase() !== 'content-security-policy' && 
-          key.toLowerCase() !== 'x-frame-options') {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey !== 'content-length' && 
+          lowerKey !== 'content-security-policy' && 
+          lowerKey !== 'x-frame-options' &&
+          !lowerKey.startsWith('access-control-')) {
         res.setHeader(key, val);
       }
     });

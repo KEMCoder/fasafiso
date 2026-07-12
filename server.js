@@ -9,7 +9,7 @@ app.use(express.json()); // Support parsing JSON body for remote logging
 
 const PORT = process.env.PORT || 3000;
 const TABII_ORIGIN = 'https://www.tabii.com';
-const PC_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const PC_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36';
 
 const CACHE_DIR = path.join(__dirname, '.cache');
 const POLYFILLS_DIR = path.join(__dirname, 'public');
@@ -126,6 +126,8 @@ app.get('/_proxy/polyfills.js', (req, res) => {
     // Inject custom fixes for webOS 2.2.0 compatibility
     combined += `
       (function() {
+        window.exports = window.exports || {};
+        window.module = window.module || { exports: window.exports };
         window.requestAnimationFrame = window.requestAnimationFrame || window.webkitRequestAnimationFrame || function(cb) { setTimeout(cb, 16); };
       })();
     `;
@@ -200,7 +202,7 @@ app.all('*', async (req, res) => {
                 chrome: '38'
               },
               useBuiltIns: false,
-              modules: false
+              modules: 'auto' // Transpile ES modules to CommonJS
             }]
           ],
           compact: true,

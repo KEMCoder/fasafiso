@@ -271,7 +271,7 @@ app.get('/_proxy/poll-session', (req, res) => {
 });
 
 // Device Activation HTML interface
-app.get('/activate', (req, res) => {
+app.get(['/activate', '/*/activate'], (req, res) => {
   res.send(`
     <!DOCTYPE html>
     <html>

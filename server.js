@@ -13,7 +13,9 @@ const PC_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537
 
 const CACHE_DIR = path.join(__dirname, '.cache');
 const POLYFILLS_DIR = path.join(__dirname, 'public');
-if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR);
+// Clear cache on every startup to force fresh Babel transpilation after code changes
+if (fs.existsSync(CACHE_DIR)) { fs.readdirSync(CACHE_DIR).forEach(f => fs.unlinkSync(path.join(CACHE_DIR, f))); }
+else { fs.mkdirSync(CACHE_DIR); }
 if (!fs.existsSync(POLYFILLS_DIR)) fs.mkdirSync(POLYFILLS_DIR);
 
 // URLs for robust polyfills
@@ -292,21 +294,25 @@ app.all('*', async (req, res) => {
                 chrome: '38'
               },
               useBuiltIns: false,
-              modules: false // Do NOT transpile ES modules - preserves webpack scoping
+              modules: false // Do NOT change module format - preserves webpack __webpack_require__ scoping
             }]
           ],
           compact: true,
           minified: true,
-          sourceType: 'script' // Treat as script, not module, to avoid 'import/export' syntax parsing
+          sourceType: 'unambiguous' // Auto-detect script vs module; handles both webpack bundles and ES modules
         });
 
-        const transpiledCode = transpiled.code;
+        // Chrome 38 parser bug: comma-expression with anonymous function e.g. `x={},function(){}`
+        // triggers 'Unexpected token ('. Wrap entire file in an IIFE to avoid top-level comma exprs.
+        let transpiledCode = transpiled.code;
+        transpiledCode = '(function(){' + transpiledCode + '})();';
+
         fs.writeFileSync(cachePath, transpiledCode);
-        console.log(`Transpiled ${req.path}: ${originalJs.length} -> ${transpiledCode.length} bytes`);
+        console.log(`Transpiled ${req.path}: ${originalJs.length} -> ${transpiledCode.length} bytes OK`);
         res.setHeader('Content-Type', 'application/javascript');
         return res.send(transpiledCode);
       } catch (babelErr) {
-        console.error(`Babel FAILED for ${req.path}: ${babelErr.message.substring(0, 200)}`);
+        console.error(`Babel FAILED for ${req.path}: ${babelErr.message.substring(0, 300)}`);
         // Serve original as fallback
         res.setHeader('Content-Type', 'application/javascript');
         return res.send(originalJs);

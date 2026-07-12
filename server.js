@@ -73,73 +73,155 @@ app.get('/_proxy/polyfills.js', (req, res) => {
           }
           return String(arg);
         }).join(' ');
-        
         var xhr = new XMLHttpRequest();
         xhr.open('POST', proxyLogUrl, true);
         xhr.setRequestHeader('Content-Type', 'application/json');
         xhr.send(JSON.stringify({ type: type, message: msg }));
       }
-
-      // Hijack console methods
       var originalLog = console.log;
-      console.log = function() {
-        sendLog('log', arguments);
-        if (originalLog) originalLog.apply(console, arguments);
-      };
-      
+      console.log = function() { sendLog('log', arguments); if (originalLog) originalLog.apply(console, arguments); };
       var originalError = console.error;
-      console.error = function() {
-        sendLog('error', arguments);
-        if (originalError) originalError.apply(console, arguments);
-      };
-      
+      console.error = function() { sendLog('error', arguments); if (originalError) originalError.apply(console, arguments); };
       var originalWarn = console.warn;
-      console.warn = function() {
-        sendLog('warn', arguments);
-        if (originalWarn) originalWarn.apply(console, arguments);
-      };
-
-      // Catch unhandled errors
+      console.warn = function() { sendLog('warn', arguments); if (originalWarn) originalWarn.apply(console, arguments); };
       window.addEventListener('error', function(e) {
         var msg = e.message + ' at ' + e.filename + ':' + e.lineno + ':' + e.colno;
-        if (e.error && e.error.stack) {
-          msg += '\\nStack: ' + e.error.stack;
-        }
-        sendLog('window-error', [msg]);
+        sendLog('window-error', [JSON.stringify({line:e.lineno,column:e.colno,sourceURL:e.filename})]);
       });
-      
       console.log("Remote logging initialized. TV is streaming console logs to PC.");
     })();
   `;
 
-  try {
-    if (fs.existsSync(path.join(POLYFILLS_DIR, 'coreJs.js'))) {
-      combined += fs.readFileSync(path.join(POLYFILLS_DIR, 'coreJs.js'), 'utf8') + '\n';
-    }
-    if (fs.existsSync(path.join(POLYFILLS_DIR, 'fetch.js'))) {
-      combined += fs.readFileSync(path.join(POLYFILLS_DIR, 'fetch.js'), 'utf8') + '\n';
-    }
-    if (fs.existsSync(path.join(POLYFILLS_DIR, 'urlSearchParams.js'))) {
-      combined += fs.readFileSync(path.join(POLYFILLS_DIR, 'urlSearchParams.js'), 'utf8') + '\n';
-    }
-    
-    // Strip ES6 export statements to prevent SyntaxError in browsers that don't support ES modules
-    combined = combined.replace(/\bexport\s*\{[^}]+\};?/g, '');
-    combined = combined.replace(/\bexport\s+default\s+[\w\d_]+;?/g, '');
-    
-    // Inject custom fixes for webOS 2.2.0 compatibility
-    combined += `
-      (function() {
-        window.exports = window.exports || {};
-        window.module = window.module || { exports: window.exports };
-        window.requestAnimationFrame = window.requestAnimationFrame || window.webkitRequestAnimationFrame || function(cb) { setTimeout(cb, 16); };
-      })();
-    `;
-    
-    res.send(combined);
-  } catch (err) {
-    res.status(500).send(`console.error("Failed to load polyfills on proxy: " + ${JSON.stringify(err.message)});`);
-  }
+  // Inline minimal polyfills (NO CDN, NO export statements - 100% ES5 safe)
+  combined += `
+    (function(win) {
+      // _N_E is Next.js global chunk registry - must exist before any chunk loads
+      win._N_E = win._N_E || {};
+
+      // Promise polyfill (tiny, ES5-only)
+      if (!win.Promise) {
+        win.Promise = (function() {
+          function Promise(fn) {
+            var state = 'pending', value, handlers = [];
+            function resolve(val) {
+              if (state !== 'pending') return;
+              state = 'resolved'; value = val;
+              handlers.forEach(function(h) { h.onFulfilled(val); });
+            }
+            function reject(val) {
+              if (state !== 'pending') return;
+              state = 'rejected'; value = val;
+              handlers.forEach(function(h) { h.onRejected(val); });
+            }
+            function handle(h) {
+              if (state === 'pending') { handlers.push(h); return; }
+              if (state === 'resolved') { h.onFulfilled(value); return; }
+              h.onRejected(value);
+            }
+            this.then = function(onFulfilled, onRejected) {
+              return new Promise(function(resolve, reject) {
+                handle({
+                  onFulfilled: function(v) { try { resolve(onFulfilled ? onFulfilled(v) : v); } catch(e) { reject(e); } },
+                  onRejected:  function(v) { try { resolve(onRejected ? onRejected(v) : v); } catch(e) { reject(e); } }
+                });
+              });
+            };
+            this.catch = function(onRejected) { return this.then(null, onRejected); };
+            try { fn(resolve, reject); } catch(e) { reject(e); }
+          }
+          Promise.resolve = function(v) { return new Promise(function(res) { res(v); }); };
+          Promise.reject = function(v) { return new Promise(function(res, rej) { rej(v); }); };
+          Promise.all = function(arr) {
+            return new Promise(function(res, rej) {
+              var results = [], remaining = arr.length;
+              if (!remaining) { res(results); return; }
+              arr.forEach(function(p, i) {
+                Promise.resolve(p).then(function(v) { results[i] = v; if (!--remaining) res(results); }, rej);
+              });
+            });
+          };
+          return Promise;
+        })();
+      }
+
+      // Object.assign polyfill
+      if (!Object.assign) {
+        Object.assign = function(target) {
+          for (var i = 1; i < arguments.length; i++) {
+            var src = arguments[i];
+            if (src) for (var key in src) { if (Object.prototype.hasOwnProperty.call(src, key)) target[key] = src[key]; }
+          }
+          return target;
+        };
+      }
+
+      // Array.from polyfill
+      if (!Array.from) {
+        Array.from = function(obj) {
+          return Array.prototype.slice.call(obj);
+        };
+      }
+
+      // fetch polyfill using XMLHttpRequest
+      if (!win.fetch) {
+        win.fetch = function(url, opts) {
+          opts = opts || {};
+          return new Promise(function(resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            xhr.open(opts.method || 'GET', url);
+            if (opts.headers) {
+              Object.keys(opts.headers).forEach(function(k) { xhr.setRequestHeader(k, opts.headers[k]); });
+            }
+            xhr.onload = function() {
+              var res = {
+                ok: xhr.status >= 200 && xhr.status < 300,
+                status: xhr.status,
+                statusText: xhr.statusText,
+                text: function() { return Promise.resolve(xhr.responseText); },
+                json: function() { return Promise.resolve(JSON.parse(xhr.responseText)); }
+              };
+              resolve(res);
+            };
+            xhr.onerror = function() { reject(new Error('Network request failed')); };
+            xhr.send(opts.body || null);
+          });
+        };
+      }
+
+      // requestAnimationFrame polyfill
+      win.requestAnimationFrame = win.requestAnimationFrame || win.webkitRequestAnimationFrame || function(cb) { return setTimeout(cb, 16); };
+      win.cancelAnimationFrame = win.cancelAnimationFrame || function(id) { clearTimeout(id); };
+
+      // URLSearchParams polyfill (minimal)
+      if (!win.URLSearchParams) {
+        win.URLSearchParams = function(str) {
+          this._data = {};
+          var self = this;
+          if (str) {
+            str.replace(/^\\?/, '').split('&').forEach(function(pair) {
+              var parts = pair.split('=');
+              if (parts[0]) self._data[decodeURIComponent(parts[0])] = decodeURIComponent(parts[1] || '');
+            });
+          }
+          this.get = function(k) { return this._data[k] !== undefined ? this._data[k] : null; };
+          this.set = function(k, v) { this._data[k] = v; };
+          this.toString = function() {
+            return Object.keys(this._data).map(function(k) {
+              return encodeURIComponent(k) + '=' + encodeURIComponent(self._data[k]);
+            }).join('&');
+          };
+        };
+      }
+
+      // window.exports and module safety
+      win.exports = win.exports || {};
+      win.module = win.module || { exports: win.exports };
+
+      console.log("webOS polyfills loaded. _N_E=" + typeof win._N_E + " Promise=" + typeof win.Promise + " fetch=" + typeof win.fetch);
+    })(window);
+  `;
+
+  res.send(combined);
 });
 
 // Main proxy route

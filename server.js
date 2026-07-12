@@ -186,18 +186,50 @@ app.all('*', async (req, res) => {
 
     const contentType = response.headers['content-type'] || '';
     
-    // 1. Handle JS files: Serve directly without Babel transpilation (tabii serves legacy ES5 chunks to Chrome 50)
+    // 1. Handle JS files: Transpilation to ES5 (needed to compile modern JS features like const/let in webpack/framework chunks to ES5)
     if (req.path.endsWith('.js') || contentType.includes('javascript')) {
-      res.setHeader('Content-Type', 'application/javascript');
-      return res.send(response.data);
+      const originalJs = response.data.toString('utf8');
+      const cacheKey = path.basename(req.path) + '_' + require('crypto').createHash('md5').update(originalJs).digest('hex') + '.js';
+      const cachePath = path.join(CACHE_DIR, cacheKey);
+
+      if (fs.existsSync(cachePath)) {
+        const cachedJs = fs.readFileSync(cachePath, 'utf8');
+        res.setHeader('Content-Type', 'application/javascript');
+        return res.send(cachedJs);
+      }
+
+      console.log(`Transpiling JS chunk: ${req.path}...`);
+      try {
+        const transpiled = babel.transformSync(originalJs, {
+          presets: [
+            ['@babel/preset-env', {
+              targets: {
+                chrome: '38'
+              },
+              useBuiltIns: false,
+              modules: false // CRITICAL: Do not transpile ES modules, keep webpack/global scoping intact!
+            }]
+          ],
+          compact: true,
+          minified: true
+        });
+
+        fs.writeFileSync(cachePath, transpiled.code);
+        res.setHeader('Content-Type', 'application/javascript');
+        return res.send(transpiled.code);
+      } catch (babelErr) {
+        console.error(`Babel transpilation failed for ${req.path}:`, babelErr.message);
+        res.setHeader('Content-Type', 'application/javascript');
+        return res.send(originalJs);
+      }
     }
 
     // 2. Handle HTML files: Inject polyfills and strip trackers
     if (contentType.includes('html')) {
       let html = response.data.toString('utf8');
       
-      // Strip AppsFlyer / Adjust tracking script to prevent SyntaxError
-      html = html.replace(/<script id="appsflyer"[\s\S]*?<\/script>/g, '');
+      // Strip AppsFlyer / Adjust tracking script content inside __NEXT_DATA__ JSON to prevent SyntaxError
+      html = html.replace(/!function\(t,r,e,a,n,o,i,l,c,s,d,h,u\)[\s\S]*?__realObj[\s\S]*?\)\)/g, 'console.log("Tracker disabled")');
       
       const polyfillScript = '<script src="/_proxy/polyfills.js"></script>';
       if (html.includes('<head>')) {

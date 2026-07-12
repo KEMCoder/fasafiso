@@ -268,19 +268,22 @@ app.all('*', async (req, res) => {
 
     const contentType = response.headers['content-type'] || '';
     
-    // 1. Handle JS files: Transpilation to ES5 (needed to compile modern JS features like const/let in webpack/framework chunks to ES5)
+    // 1. Handle JS files: Transpilation to ES5
     if (req.path.endsWith('.js') || contentType.includes('javascript')) {
       const originalJs = response.data.toString('utf8');
       const cacheKey = path.basename(req.path) + '_' + require('crypto').createHash('md5').update(originalJs).digest('hex') + '.js';
       const cachePath = path.join(CACHE_DIR, cacheKey);
 
-      if (fs.existsSync(cachePath)) {
+      // Force re-transpile critical Next.js runtime chunks (never serve cached version of these)
+      const isCritical = req.path.includes('webpack') || req.path.includes('polyfills');
+
+      if (!isCritical && fs.existsSync(cachePath)) {
         const cachedJs = fs.readFileSync(cachePath, 'utf8');
         res.setHeader('Content-Type', 'application/javascript');
         return res.send(cachedJs);
       }
 
-      console.log(`Transpiling JS chunk: ${req.path}...`);
+      console.log(`Transpiling JS chunk: ${req.path} (${originalJs.length} bytes)...`);
       try {
         const transpiled = babel.transformSync(originalJs, {
           presets: [
@@ -289,18 +292,22 @@ app.all('*', async (req, res) => {
                 chrome: '38'
               },
               useBuiltIns: false,
-              modules: false // CRITICAL: Do not transpile ES modules, keep webpack/global scoping intact!
+              modules: false // Do NOT transpile ES modules - preserves webpack scoping
             }]
           ],
           compact: true,
-          minified: true
+          minified: true,
+          sourceType: 'script' // Treat as script, not module, to avoid 'import/export' syntax parsing
         });
 
-        fs.writeFileSync(cachePath, transpiled.code);
+        const transpiledCode = transpiled.code;
+        fs.writeFileSync(cachePath, transpiledCode);
+        console.log(`Transpiled ${req.path}: ${originalJs.length} -> ${transpiledCode.length} bytes`);
         res.setHeader('Content-Type', 'application/javascript');
-        return res.send(transpiled.code);
+        return res.send(transpiledCode);
       } catch (babelErr) {
-        console.error(`Babel transpilation failed for ${req.path}:`, babelErr.message);
+        console.error(`Babel FAILED for ${req.path}: ${babelErr.message.substring(0, 200)}`);
+        // Serve original as fallback
         res.setHeader('Content-Type', 'application/javascript');
         return res.send(originalJs);
       }

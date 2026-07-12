@@ -123,6 +123,10 @@ app.get('/_proxy/polyfills.js', (req, res) => {
       combined += fs.readFileSync(path.join(POLYFILLS_DIR, 'urlSearchParams.js'), 'utf8') + '\n';
     }
     
+    // Strip ES6 export statements to prevent SyntaxError in browsers that don't support ES modules
+    combined = combined.replace(/\bexport\s+\{[^}]+\};?/g, '');
+    combined = combined.replace(/\bexport\s+default\s+[\w\d_]+;?/g, '');
+    
     // Inject custom fixes for webOS 2.2.0 compatibility
     combined += `
       (function() {

@@ -523,7 +523,6 @@ app.all('*', async (req, res) => {
     if (contentType.includes('html')) {
       let html = response.data.toString('utf8');
       html = html.replace(/"basePath"\s*:\s*"https:\/\/eu1\.tabii\.com\/apigateway"/g, '"basePath":"/apigateway"');
-      html = html.replace(/!function\(t,r,e,a,n,o,i,l,c,s,d,h,u\)[\s\S]*?__realObj[\s\S]*?\)\)/g, 'console.log("Tracker disabled")');
       
       const polyfillScript = '<script src="/_proxy/polyfills.js"></script>';
       if (html.includes('<head>')) {

@@ -387,9 +387,12 @@ app.post('/activate', (req, res) => {
 });
 
 // tabii API Proxy
-app.all('/eu1/*', async (req, res) => {
-  const pathAfterEu1 = req.path.replace(/^\/eu1/, '');
-  const targetUrl = 'https://eu1.tabii.com' + pathAfterEu1 + (req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '');
+app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async (req, res) => {
+  let pathAfterDomain = req.path;
+  if (req.path.startsWith('/eu1/')) {
+    pathAfterDomain = req.path.replace(/^\/eu1/, '');
+  }
+  const targetUrl = 'https://eu1.tabii.com' + pathAfterDomain + (req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '');
   
   // Forward request headers
   const headers = { ...req.headers };
@@ -414,7 +417,7 @@ app.all('/eu1/*', async (req, res) => {
     const response = await axios(requestConfig);
     
     // Intercept login to store token
-    if (req.path === '/eu1/apigateway/auth/v2/login' && response.status === 200 && response.data) {
+    if ((req.path === '/eu1/apigateway/auth/v2/login' || req.path === '/apigateway/auth/v2/login') && response.status === 200 && response.data) {
       const loginData = response.data;
       if (loginData.accessToken) {
         console.log('[API PROXY] Intercepted successful login!');

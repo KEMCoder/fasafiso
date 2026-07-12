@@ -1,69 +1,71 @@
 const express = require('express');
 const axios = require('axios');
-const babel = require('@babel/core');
 const fs = require('fs');
 const path = require('path');
 const app = express();
 
-app.use(express.json()); // Support parsing JSON body for remote logging
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 const TABII_ORIGIN = 'https://www.tabii.com';
-const PC_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36';
+const PC_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-const CACHE_DIR = path.join(__dirname, '.cache');
-const POLYFILLS_DIR = path.join(__dirname, 'public');
-// Clear cache on every startup to force fresh Babel transpilation after code changes
-if (fs.existsSync(CACHE_DIR)) { fs.readdirSync(CACHE_DIR).forEach(f => fs.unlinkSync(path.join(CACHE_DIR, f))); }
-else { fs.mkdirSync(CACHE_DIR); }
-if (!fs.existsSync(POLYFILLS_DIR)) fs.mkdirSync(POLYFILLS_DIR);
+// Global Session Stores for TV Pairing
+const activeSessions = {}; // session_id -> { accessToken, refreshToken, timestamp }
+const pendingActivations = {}; // 6-digit-code -> { status, accessToken, refreshToken, timestamp }
 
-// URLs for robust polyfills
-const POLYFILL_URLS = {
-  coreJs: 'https://cdnjs.cloudflare.com/ajax/libs/core-js/3.37.1/minified.js',
-  fetch: 'https://cdnjs.cloudflare.com/ajax/libs/fetch/3.6.20/fetch.min.js',
-  urlSearchParams: 'https://cdnjs.cloudflare.com/ajax/libs/url-search-params/1.1.0/url-search-params.js'
-};
-
-// Download polyfills if they don't exist locally
-async function downloadPolyfills() {
-  for (const [key, url] of Object.entries(POLYFILL_URLS)) {
-    const filePath = path.join(POLYFILLS_DIR, `${key}.js`);
-    if (!fs.existsSync(filePath)) {
-      console.log(`Downloading polyfill: ${key} from ${url}...`);
-      try {
-        const response = await axios.get(url, { headers: { 'User-Agent': PC_USER_AGENT } });
-        fs.writeFileSync(filePath, response.data);
-        console.log(`Saved ${key}.js`);
-      } catch (err) {
-        console.error(`Failed to download polyfill ${key}:`, err.message);
-      }
+// Dynamic buildId parsing
+let currentBuildId = '10.07.2026-07.44.16';
+async function updateBuildId() {
+  try {
+    const response = await axios.get('https://www.tabii.com/tr', { headers: { 'User-Agent': PC_USER_AGENT } });
+    const html = response.data;
+    const match = html.match(/"buildId"\s*:\s*"([^"]+)"/);
+    if (match && match[1]) {
+      currentBuildId = match[1];
+      console.log('[BUILD ID] Updated tabii buildId to:', currentBuildId);
     }
+  } catch (err) {
+    console.error('[BUILD ID] Failed to update buildId, using fallback:', currentBuildId, err.message);
   }
 }
 
-// Receive remote logs from the TV browser and print them in the PC terminal
+// Update buildId on startup and then every 30 minutes
+updateBuildId();
+setInterval(updateBuildId, 30 * 60 * 1000);
+
+// Helper function to parse cookie manually
+function getCookie(req, name) {
+  const rc = req.headers.cookie;
+  if (!rc) return null;
+  const cookies = rc.split(';').reduce((acc, c) => {
+    const parts = c.split('=');
+    acc[parts.shift().trim()] = decodeURI(parts.join('='));
+    return acc;
+  }, {});
+  return cookies[name] || null;
+}
+
+// Receive remote logs from TV and output in console
 app.post('/_proxy/log', (req, res) => {
   const { type, message } = req.body;
   let prefix = '[TV LOG]';
   if (type === 'error' || type === 'window-error') {
-    prefix = '\x1b[31m[TV ERROR]\x1b[0m'; // Red
+    prefix = '\x1b[31m[TV ERROR]\x1b[0m';
   } else if (type === 'warn') {
-    prefix = '\x1b[33m[TV WARN]\x1b[0m';  // Yellow
+    prefix = '\x1b[33m[TV WARN]\x1b[0m';
   } else {
-    prefix = '\x1b[36m[TV LOG]\x1b[0m';   // Cyan
+    prefix = '\x1b[36m[TV LOG]\x1b[0m';
   }
   console.log(`${prefix} ${message}`);
   res.sendStatus(200);
 });
 
-// Serve downloaded polyfills and inject remote logger
+// Minimal, 100% ES5-safe polyfills for older smart TVs (webOS 2.2.0)
 app.get('/_proxy/polyfills.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
-  let combined = '';
-  
-  // Inject remote logging code FIRST so that all errors from other polyfills/scripts are captured
-  combined += `
+  let combined = `
     (function() {
       var proxyLogUrl = '/_proxy/log';
       function sendLog(type, args) {
@@ -87,20 +89,14 @@ app.get('/_proxy/polyfills.js', (req, res) => {
       var originalWarn = console.warn;
       console.warn = function() { sendLog('warn', arguments); if (originalWarn) originalWarn.apply(console, arguments); };
       window.addEventListener('error', function(e) {
-        var msg = e.message + ' at ' + e.filename + ':' + e.lineno + ':' + e.colno;
-        sendLog('window-error', [JSON.stringify({line:e.lineno,column:e.colno,sourceURL:e.filename})]);
+        sendLog('window-error', [JSON.stringify({line:e.lineno,column:e.colno,sourceURL:e.filename,message:e.message})]);
       });
-      console.log("Remote logging initialized. TV is streaming console logs to PC.");
+      console.log("Remote logging initialized on TV.");
     })();
-  `;
 
-  // Inline minimal polyfills (NO CDN, NO export statements - 100% ES5 safe)
-  combined += `
     (function(win) {
-      // _N_E is Next.js global chunk registry - must exist before any chunk loads
       win._N_E = win._N_E || {};
 
-      // Promise polyfill (tiny, ES5-only)
       if (!win.Promise) {
         win.Promise = (function() {
           function Promise(fn) {
@@ -146,7 +142,6 @@ app.get('/_proxy/polyfills.js', (req, res) => {
         })();
       }
 
-      // Object.assign polyfill
       if (!Object.assign) {
         Object.assign = function(target) {
           for (var i = 1; i < arguments.length; i++) {
@@ -157,14 +152,10 @@ app.get('/_proxy/polyfills.js', (req, res) => {
         };
       }
 
-      // Array.from polyfill
       if (!Array.from) {
-        Array.from = function(obj) {
-          return Array.prototype.slice.call(obj);
-        };
+        Array.from = function(obj) { return Array.prototype.slice.call(obj); };
       }
 
-      // fetch polyfill using XMLHttpRequest
       if (!win.fetch) {
         win.fetch = function(url, opts) {
           opts = opts || {};
@@ -190,11 +181,9 @@ app.get('/_proxy/polyfills.js', (req, res) => {
         };
       }
 
-      // requestAnimationFrame polyfill
       win.requestAnimationFrame = win.requestAnimationFrame || win.webkitRequestAnimationFrame || function(cb) { return setTimeout(cb, 16); };
       win.cancelAnimationFrame = win.cancelAnimationFrame || function(id) { clearTimeout(id); };
 
-      // URLSearchParams polyfill (minimal)
       if (!win.URLSearchParams) {
         win.URLSearchParams = function(str) {
           this._data = {};
@@ -215,31 +204,292 @@ app.get('/_proxy/polyfills.js', (req, res) => {
         };
       }
 
-      // window.exports and module safety
       win.exports = win.exports || {};
       win.module = win.module || { exports: win.exports };
-
-      console.log("webOS polyfills loaded. _N_E=" + typeof win._N_E + " Promise=" + typeof win.Promise + " fetch=" + typeof win.fetch);
+      console.log("ES5 core polyfills loaded successfully.");
     })(window);
   `;
-
   res.send(combined);
 });
 
-// Main proxy route
+// Image Proxy to avoid CORS/SSL issues on older TVs
+app.get('/_proxy/image/:name', async (req, res) => {
+  const imageUrl = `https://cms-tabii-public-image.tabii.com/int/${req.params.name}`;
+  try {
+    const response = await axios.get(imageUrl, {
+      responseType: 'stream',
+      headers: { 'User-Agent': PC_USER_AGENT }
+    });
+    res.setHeader('Content-Type', response.headers['content-type']);
+    response.data.pipe(res);
+  } catch (err) {
+    res.sendStatus(404);
+  }
+});
+
+// pairing endpoints
+app.get('/_proxy/get-code', (req, res) => {
+  let code;
+  do {
+    code = Math.floor(100000 + Math.random() * 900000).toString();
+  } while (pendingActivations[code]);
+
+  pendingActivations[code] = {
+    status: 'pending',
+    timestamp: Date.now()
+  };
+
+  console.log(`[PAIRING] Generated pairing code ${code} for TV`);
+  res.json({ code: code });
+});
+
+app.get('/_proxy/poll-session', (req, res) => {
+  const code = req.query.code;
+  if (!code || !pendingActivations[code]) {
+    return res.json({ status: 'error', message: 'Invalid code' });
+  }
+
+  const activation = pendingActivations[code];
+  if (Date.now() - activation.timestamp > 10 * 60 * 1000) { // 10 min expiry
+    delete pendingActivations[code];
+    return res.json({ status: 'expired' });
+  }
+
+  if (activation.status === 'activated') {
+    console.log(`[PAIRING] TV paired successfully using code ${code}`);
+    res.json({
+      status: 'success',
+      tokens: {
+        accessToken: activation.accessToken,
+        refreshToken: activation.refreshToken
+      }
+    });
+    delete pendingActivations[code];
+  } else {
+    res.json({ status: 'pending' });
+  }
+});
+
+// Device Activation HTML interface
+app.get('/activate', (req, res) => {
+  const sessionId = getCookie(req, 'proxy_session_id');
+  const session = sessionId ? activeSessions[sessionId] : null;
+
+  if (!session) {
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>tabii TV - Cihaz Eşleştirme</title>
+        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+        <style>
+          body { background-color: #0b0f19; color: #ffffff; font-family: 'Outfit', sans-serif; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
+          .card { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.05); padding: 40px; border-radius: 20px; text-align: center; max-width: 400px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+          h1 { color: #00ffcc; margin-top: 0; }
+          p { color: #8a99ad; line-height: 1.6; }
+          .btn { background: linear-gradient(135deg, #00ffcc, #00b3ff); color: #0b0f19; border: none; padding: 15px 30px; font-size: 16px; font-weight: bold; border-radius: 10px; cursor: pointer; width: 100%; margin-top: 20px; transition: transform 0.2s; text-decoration: none; display: block; }
+          .btn:hover { transform: scale(1.02); }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h1>tabii TV</h1>
+          <p>Cihazınızı eşleştirmek için öncelikle tabii hesabınızla giriş yapmalısınız.</p>
+          <a class="btn" href="/tr/login">Giriş Yap</a>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>tabii TV - Cihaz Eşleştirme</title>
+      <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+      <style>
+        body { background-color: #0b0f19; color: #ffffff; font-family: 'Outfit', sans-serif; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        .card { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.05); padding: 40px; border-radius: 20px; text-align: center; max-width: 400px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        h1 { color: #00ffcc; margin-top: 0; }
+        p { color: #8a99ad; line-height: 1.6; }
+        .input-code { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #ffffff; padding: 15px; font-size: 24px; text-align: center; letter-spacing: 5px; border-radius: 10px; width: 80%; margin-top: 20px; outline: none; }
+        .input-code:focus { border-color: #00ffcc; }
+        .btn { background: linear-gradient(135deg, #00ffcc, #00b3ff); color: #0b0f19; border: none; padding: 15px 30px; font-size: 16px; font-weight: bold; border-radius: 10px; cursor: pointer; width: 100%; margin-top: 20px; transition: transform 0.2s; }
+        .btn:hover { transform: scale(1.02); }
+        .error { color: #ff3366; margin-top: 10px; font-weight: bold; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>Cihazı Eşleştir</h1>
+        <p>Televizyonunuzda gördüğünüz 6 haneli eşleştirme kodunu girin:</p>
+        <form method="POST" action="/activate">
+          <input type="text" class="input-code" name="code" maxlength="6" required autofocus placeholder="123456"><br>
+          <button type="submit" class="btn">TV'yi Bağla</button>
+        </form>
+        ${req.query.error ? `<div class="error">Geçersiz veya süresi dolmuş kod!</div>` : ''}
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+app.post('/activate', (req, res) => {
+  const sessionId = getCookie(req, 'proxy_session_id');
+  const session = sessionId ? activeSessions[sessionId] : null;
+
+  if (!session) return res.redirect('/activate');
+
+  const code = req.body.code;
+  if (!code || !pendingActivations[code]) {
+    return res.redirect('/activate?error=1');
+  }
+
+  pendingActivations[code] = {
+    status: 'activated',
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    timestamp: Date.now()
+  };
+
+  console.log(`[PAIRING] Successfully paired TV code ${code}`);
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>tabii TV - Başarılı</title>
+      <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+      <style>
+        body { background-color: #0b0f19; color: #ffffff; font-family: 'Outfit', sans-serif; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        .card { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.05); padding: 40px; border-radius: 20px; text-align: center; max-width: 400px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        h1 { color: #00ffcc; margin-top: 0; }
+        p { color: #8a99ad; line-height: 1.6; }
+        .success-icon { font-size: 60px; color: #00ffcc; margin-bottom: 20px; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="success-icon">✓</div>
+        <h1>Eşleştirme Başarılı!</h1>
+        <p>Televizyonunuz tabii hesabınıza başarıyla bağlandı. TV ekranından devam edebilirsiniz.</p>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+// tabii API Proxy
+app.all('/apigateway/*', async (req, res) => {
+  const pathAfterApi = req.path.replace(/^\/apigateway/, '');
+  const targetUrl = 'https://eu1.tabii.com/apigateway' + pathAfterApi + (req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '');
+  
+  // Forward request headers
+  const headers = { ...req.headers };
+  headers['host'] = 'eu1.tabii.com';
+  headers['origin'] = 'https://www.tabii.com';
+  headers['referer'] = 'https://www.tabii.com/';
+  delete headers['cookie'];
+  
+  const requestConfig = {
+    method: req.method,
+    url: targetUrl,
+    headers: headers,
+    data: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
+    responseType: 'json',
+    validateStatus: () => true
+  };
+
+  try {
+    const response = await axios(requestConfig);
+    
+    // Intercept login to store token
+    if (req.path === '/apigateway/auth/v2/login' && response.status === 200 && response.data) {
+      const loginData = response.data;
+      if (loginData.accessToken) {
+        console.log('[API PROXY] Intercepted successful login!');
+        const sessionId = 'sess_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+        activeSessions[sessionId] = {
+          accessToken: loginData.accessToken,
+          refreshToken: loginData.refreshToken,
+          timestamp: Date.now()
+        };
+        res.setHeader('Set-Cookie', `proxy_session_id=${sessionId}; Path=/; HttpOnly; Max-Age=31536000`);
+      }
+    }
+    
+    res.status(response.status);
+    Object.entries(response.headers).forEach(([key, val]) => {
+      if (key.toLowerCase() !== 'content-length' && 
+          key.toLowerCase() !== 'content-security-policy' && 
+          key.toLowerCase() !== 'x-frame-options') {
+        res.setHeader(key, val);
+      }
+    });
+    
+    res.json(response.data);
+  } catch (err) {
+    console.error(`[API PROXY ERROR] ${req.path} failed:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// custom endpoints for TV data fetching
+app.get('/api/build-id', (req, res) => {
+  res.json({ buildId: currentBuildId });
+});
+
+app.get('/api/home', async (req, res) => {
+  try {
+    const url = `https://www.tabii.com/_next/data/${currentBuildId}/tr.json`;
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': PC_USER_AGENT,
+        'Accept': 'application/json'
+      }
+    });
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/detail/:id/:slug', async (req, res) => {
+  const { id, slug } = req.params;
+  try {
+    const url = `https://www.tabii.com/_next/data/${currentBuildId}/tr/detail/${id}/${slug}.json`;
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': PC_USER_AGENT,
+        'Accept': 'application/json'
+      }
+    });
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Expose static files of TV app as /tv path for backup or testing
+app.use('/tv', express.static(path.join(__dirname, '../tabii-webos')));
+
+// Main fallback reverse-proxy handler
 app.all('*', async (req, res) => {
-  // Exclude proxy helper routes
   if (req.path === '/_proxy/polyfills.js' || req.path === '/_proxy/log') return;
 
   const targetUrl = TABII_ORIGIN + req.url;
-  console.log(`[REQUEST] ${req.method} ${req.url}`);
   
-  // Setup headers for tabii.com
   const headers = { ...req.headers };
   headers['host'] = 'www.tabii.com';
   headers['user-agent'] = PC_USER_AGENT;
   
-  // Adjust referer and origin to tabii.com to avoid CORS/security blocks
   if (headers['referer']) {
     headers['referer'] = headers['referer'].replace(req.headers.host, 'www.tabii.com');
   }
@@ -258,7 +508,6 @@ app.all('*', async (req, res) => {
   try {
     const response = await axios(requestConfig);
     
-    // Forward response status and headers
     res.status(response.status);
     Object.entries(response.headers).forEach(([key, val]) => {
       if (key.toLowerCase() !== 'content-length' && 
@@ -270,60 +519,10 @@ app.all('*', async (req, res) => {
 
     const contentType = response.headers['content-type'] || '';
     
-    // 1. Handle JS files: Transpilation to ES5
-    if (req.path.endsWith('.js') || contentType.includes('javascript')) {
-      const originalJs = response.data.toString('utf8');
-      const cacheKey = path.basename(req.path) + '_' + require('crypto').createHash('md5').update(originalJs).digest('hex') + '.js';
-      const cachePath = path.join(CACHE_DIR, cacheKey);
-
-      // Force re-transpile critical Next.js runtime chunks (never serve cached version of these)
-      const isCritical = req.path.includes('webpack') || req.path.includes('polyfills');
-
-      if (!isCritical && fs.existsSync(cachePath)) {
-        const cachedJs = fs.readFileSync(cachePath, 'utf8');
-        res.setHeader('Content-Type', 'application/javascript');
-        return res.send(cachedJs);
-      }
-
-      console.log(`Transpiling JS chunk: ${req.path} (${originalJs.length} bytes)...`);
-      try {
-        const transpiled = babel.transformSync(originalJs, {
-          presets: [
-            ['@babel/preset-env', {
-              targets: {
-                chrome: '38'
-              },
-              useBuiltIns: false,
-              modules: false // Do NOT change module format - preserves webpack __webpack_require__ scoping
-            }]
-          ],
-          compact: true,
-          minified: true,
-          sourceType: 'unambiguous' // Auto-detect script vs module; handles both webpack bundles and ES modules
-        });
-
-        // Chrome 38 parser bug: comma-expression with anonymous function e.g. `x={},function(){}`
-        // triggers 'Unexpected token ('. Wrap entire file in an IIFE to avoid top-level comma exprs.
-        let transpiledCode = transpiled.code;
-        transpiledCode = '(function(){' + transpiledCode + '})();';
-
-        fs.writeFileSync(cachePath, transpiledCode);
-        console.log(`Transpiled ${req.path}: ${originalJs.length} -> ${transpiledCode.length} bytes OK`);
-        res.setHeader('Content-Type', 'application/javascript');
-        return res.send(transpiledCode);
-      } catch (babelErr) {
-        console.error(`Babel FAILED for ${req.path}: ${babelErr.message.substring(0, 300)}`);
-        // Serve original as fallback
-        res.setHeader('Content-Type', 'application/javascript');
-        return res.send(originalJs);
-      }
-    }
-
-    // 2. Handle HTML files: Inject polyfills and strip trackers
+    // Inject polyfills, clean scripts and rewrite basePath same-origin
     if (contentType.includes('html')) {
       let html = response.data.toString('utf8');
-      
-      // Strip AppsFlyer / Adjust tracking script content inside __NEXT_DATA__ JSON to prevent SyntaxError
+      html = html.replace(/"basePath"\s*:\s*"https:\/\/eu1\.tabii\.com\/apigateway"/g, '"basePath":"/apigateway"');
       html = html.replace(/!function\(t,r,e,a,n,o,i,l,c,s,d,h,u\)[\s\S]*?__realObj[\s\S]*?\)\)/g, 'console.log("Tracker disabled")');
       
       const polyfillScript = '<script src="/_proxy/polyfills.js"></script>';
@@ -337,20 +536,15 @@ app.all('*', async (req, res) => {
       return res.send(html);
     }
 
-    // 3. Handle other files (images, fonts, API json, video segments)
     return res.send(response.data);
-
   } catch (err) {
     console.error(`Proxy request failed to ${targetUrl}:`, err.message);
     res.status(500).send(`Proxy Error: ${err.message}`);
   }
 });
 
-// Start server after downloading polyfills
-downloadPolyfills().then(() => {
-  app.listen(PORT, () => {
-    console.log(`tabii webOS Proxy Server is running at http://localhost:${PORT}`);
-    console.log(`Target: ${TABII_ORIGIN}`);
-    console.log(`Target User-Agent (Spoofed): ${PC_USER_AGENT}`);
-  });
+app.listen(PORT, () => {
+  console.log(`tabii webOS Proxy Server is running at http://localhost:${PORT}`);
+  console.log(`Target: ${TABII_ORIGIN}`);
+  console.log(`Target User-Agent (Spoofed): ${PC_USER_AGENT}`);
 });

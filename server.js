@@ -522,7 +522,9 @@ app.all('*', async (req, res) => {
     // Inject polyfills, clean scripts and rewrite basePath same-origin
     if (contentType.includes('html')) {
       let html = response.data.toString('utf8');
-      html = html.replace(/"basePath"\s*:\s*"https:\/\/eu1\.tabii\.com\/apigateway"/g, '"basePath":"/apigateway"');
+      
+      const proxyOrigin = (req.headers['x-forwarded-proto'] || req.protocol) + '://' + req.headers.host;
+      html = html.replace(/"basePath"\s*:\s*"https:\/\/eu1\.tabii\.com\/apigateway"/g, `"basePath":"${proxyOrigin}/apigateway"`);
       
       const polyfillScript = '<script src="/_proxy/polyfills.js"></script>';
       if (html.includes('<head>')) {

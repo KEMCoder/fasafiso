@@ -427,6 +427,13 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
     pathAfterDomain = req.path.replace(/^\/eu1/, '');
   }
   const targetUrl = 'https://eu1.tabii.com' + pathAfterDomain + (req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '');
+
+  // Intercept profile token request to bypass 401 error
+  if (req.method === 'POST' && pathAfterDomain.match(/\/apigateway\/profiles\/v2\/[^\/]+\/token/)) {
+    console.log('[PROXY BYPASS] Intercepting profile token select request to return 200 OK');
+    const token = req.headers.authorization ? req.headers.authorization.replace('Bearer ', '') : '';
+    return res.json({ accessToken: token });
+  }
   
   // HARVEST TOKEN: If the browser is sending an Authorization header, capture it!
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {

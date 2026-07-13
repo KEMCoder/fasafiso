@@ -606,6 +606,10 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
       console.log(`[PROXY /token PAYLOAD]`, decodedJson);
     }
 
+    if (response.status === 401) {
+      console.log(`[PROXY 401 ERROR] Path: ${req.path} | Payload:`, decodedJson || response.data.toString('utf8').substring(0, 200));
+    }
+    
     // Auto-clear invalid session cookies on 401 ONLY for critical auth endpoints
     if ((req.path.includes('/auth/v2/me') || req.path.includes('/token/refresh') || req.path.includes('/token')) && 
         (response.status === 401 || (decodedJson && decodedJson.errorCode === 'invalidSession'))) {

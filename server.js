@@ -453,6 +453,7 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
   }
   
   console.log(`[PROXY REQUEST] ${req.method} ${req.path} -> ${targetUrl}`);
+  console.log(`[PROXY HEADERS]`, headers);
 
   const requestConfig = {
     method: req.method,

@@ -477,7 +477,7 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
     url: targetUrl,
     headers: headers,
     data: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
-    responseType: 'json',
+    responseType: 'arraybuffer',
     validateStatus: () => true
   };
 
@@ -485,19 +485,29 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
     const response = await axios(requestConfig);
     console.log(`[PROXY RESPONSE] ${req.path} -> Status ${response.status}`);
 
-    if (req.path.includes('/token')) {
-      console.log(`[PROXY /token PAYLOAD]`, response.data);
+    let responseData = response.data;
+    let decodedJson = null;
+    
+    // Try to decode as JSON for intercept logic if the content type is JSON
+    const contentType = response.headers['content-type'] || '';
+    if (contentType.includes('application/json') || req.path.includes('/token') || req.path.includes('/login')) {
+      try {
+        decodedJson = JSON.parse(response.data.toString('utf8'));
+      } catch (e) {}
+    }
+
+    if (req.path.includes('/token') && decodedJson) {
+      console.log(`[PROXY /token PAYLOAD]`, decodedJson);
     }
     
     // Intercept login to store token
-    if ((req.path === '/eu1/apigateway/auth/v2/login' || req.path === '/apigateway/auth/v2/login') && response.status === 200 && response.data) {
-      const loginData = response.data;
-      if (loginData.accessToken) {
+    if ((req.path === '/eu1/apigateway/auth/v2/login' || req.path === '/apigateway/auth/v2/login') && response.status === 200 && decodedJson) {
+      if (decodedJson.accessToken) {
         console.log('[API PROXY] Intercepted successful login!');
         const sessionId = getCookie(req, 'proxy_session_id') || ('sess_' + Math.random().toString(36).substring(2) + Date.now().toString(36));
         activeSessions[sessionId] = {
-          accessToken: loginData.accessToken,
-          refreshToken: loginData.refreshToken,
+          accessToken: decodedJson.accessToken,
+          refreshToken: decodedJson.refreshToken,
           timestamp: Date.now()
         };
         // Don't overwrite existing Set-Cookie if we already set one above
@@ -518,7 +528,7 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
       }
     });
     
-    res.json(response.data);
+    res.send(responseData);
   } catch (err) {
     console.error(`[API PROXY ERROR] ${req.path} failed:`, err.message);
     res.status(500).json({ error: err.message });

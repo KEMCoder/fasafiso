@@ -466,7 +466,14 @@ app.all(['/eu1/apigateway/drm/*', '/apigateway/drm/*'], async (req, res) => {
       maxBodyLength: Infinity,
     });
 
-    console.log(`[DRM PROXY] Response status: ${response.status}`);
+    console.log(`[DRM PROXY] Response status: ${response.status} | Content-Type: ${response.headers['content-type'] || 'unknown'} | Body size: ${response.data ? response.data.length : 0} bytes`);
+    if (response.status !== 200) {
+      // Log raw body for debugging
+      try {
+        const bodyText = response.data ? response.data.toString('utf8').substring(0, 500) : '(empty)';
+        console.error(`[DRM PROXY] Non-200 response body: ${bodyText}`);
+      } catch (logErr) {}
+    }
     res.status(response.status);
     res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
     res.send(response.data);

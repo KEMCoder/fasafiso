@@ -452,6 +452,8 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
     headers['cookie'] = headers['cookie'].split(';').filter(c => !c.trim().startsWith('proxy_session_id=')).join(';');
   }
   
+  console.log(`[PROXY REQUEST] ${req.method} ${req.path} -> ${targetUrl}`);
+
   const requestConfig = {
     method: req.method,
     url: targetUrl,
@@ -463,6 +465,11 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
 
   try {
     const response = await axios(requestConfig);
+    console.log(`[PROXY RESPONSE] ${req.path} -> Status ${response.status}`);
+
+    if (req.path.includes('/token')) {
+      console.log(`[PROXY /token PAYLOAD]`, response.data);
+    }
     
     // Intercept login to store token
     if ((req.path === '/eu1/apigateway/auth/v2/login' || req.path === '/apigateway/auth/v2/login') && response.status === 200 && response.data) {
@@ -506,6 +513,7 @@ app.get('/api/build-id', (req, res) => {
 });
 
 app.get('/api/home', async (req, res) => {
+  console.log(`[CUSTOM API] Fetching home catalog from Tabii (buildId: ${currentBuildId})...`);
   try {
     const url = `https://www.tabii.com/_next/data/${currentBuildId}/tr.json`;
     const response = await axios.get(url, {
@@ -514,6 +522,7 @@ app.get('/api/home', async (req, res) => {
         'Accept': 'application/json'
       }
     });
+    console.log(`[CUSTOM API] Home catalog fetched successfully.`);
     res.json(response.data);
   } catch (err) {
     res.status(500).json({ error: err.message });

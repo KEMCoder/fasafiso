@@ -165,6 +165,32 @@ app.get('/_proxy/polyfills.js', (req, res) => {
         Array.from = function(obj) { return Array.prototype.slice.call(obj); };
       }
 
+      if (win.Element && !win.Element.prototype.matches) {
+        win.Element.prototype.matches = 
+          win.Element.prototype.matchesSelector || 
+          win.Element.prototype.mozMatchesSelector || 
+          win.Element.prototype.msMatchesSelector || 
+          win.Element.prototype.oMatchesSelector || 
+          win.Element.prototype.webkitMatchesSelector || 
+          function(s) {
+            var matches = (this.document || this.ownerDocument).querySelectorAll(s),
+                i = matches.length;
+            while (--i >= 0 && matches.item(i) !== this) {}
+            return i > -1;            
+          };
+      }
+
+      if (win.Element && !win.Element.prototype.closest) {
+        win.Element.prototype.closest = function(s) {
+          var el = this;
+          do {
+            if (win.Element.prototype.matches.call(el, s)) return el;
+            el = el.parentElement || el.parentNode;
+          } while (el !== null && el.nodeType === 1);
+          return null;
+        };
+      }
+
       if (!win.fetch) {
         win.fetch = function(url, opts) {
           opts = opts || {};

@@ -447,6 +447,15 @@ app.get('/_proxy/register-local', (req, res) => {
   return res.status(400).json({ error: 'Missing url parameter' });
 });
 
+// Endpoint to clear all session cookies and force logout
+app.get('/_proxy/clear-session', (req, res) => {
+  res.clearCookie('token');
+  res.clearCookie('session');
+  res.clearCookie('proxy_session_id');
+  console.log('[SESSION] Session cookies cleared via clear-session endpoint');
+  res.redirect('/');
+});
+
 // Dynamic registration of local PC IP address for direct LAN DRM routing
 app.get('/_proxy/register-local-ip', (req, res) => {
   const ip = req.query.ip;
@@ -595,6 +604,14 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
 
     if (req.path.includes('/token') && decodedJson) {
       console.log(`[PROXY /token PAYLOAD]`, decodedJson);
+    }
+
+    // Auto-clear invalid session cookies on 401
+    if (response.status === 401 || (decodedJson && decodedJson.errorCode === 'invalidSession')) {
+      console.log(`[PROXY AUTO-LOGOUT] Detected invalid session. Clearing proxy cookies.`);
+      res.clearCookie('token');
+      res.clearCookie('session');
+      res.clearCookie('proxy_session_id');
     }
     
     // Intercept login to store token

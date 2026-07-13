@@ -4,7 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const app = express();
 
-app.use(express.json());
+// Raw body parser for DRM (Widevine binary protobuf) - MUST be before JSON parser
+app.use('/eu1/apigateway/drm', express.raw({ type: '*/*', limit: '2mb' }));
+app.use('/apigateway/drm', express.raw({ type: '*/*', limit: '2mb' }));
+
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Global CORS Middleware
@@ -430,13 +434,58 @@ app.post(['/activate', '/*/activate'], express.urlencoded({ extended: true }), (
   `);
 });
 
+// ── DRM PROXY (binary passthrough – MUST be before general API proxy) ────────
+app.all(['/eu1/apigateway/drm/*', '/apigateway/drm/*'], async (req, res) => {
+  let pathAfterDomain = req.path.startsWith('/eu1/') ? req.path.replace(/^\/eu1/, '') : req.path;
+  // Strip cache-buster so the real backend doesn't reject the ticket
+  const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')).replace(/[?&]_cb=[^&]*/g, '').replace(/^&/, '?') : '';
+  const targetUrl = 'https://eu1.tabii.com' + pathAfterDomain + queryString;
+
+  const headers = {
+    'host': 'eu1.tabii.com',
+    'origin': 'https://www.tabii.com',
+    'referer': 'https://www.tabii.com/',
+    'user-agent': PC_USER_AGENT,
+    'content-type': 'application/octet-stream',
+    'accept': '*/*',
+  };
+  if (req.headers.authorization) headers['authorization'] = req.headers.authorization;
+  if (req.headers['app-version']) headers['app-version'] = req.headers['app-version'];
+
+  console.log(`[DRM PROXY] ${req.method} ${req.path} -> ${targetUrl}`);
+
+  try {
+    const response = await axios({
+      method: req.method,
+      url: targetUrl,
+      headers: headers,
+      data: req.body,          // raw Buffer from express.raw()
+      responseType: 'arraybuffer',
+      validateStatus: () => true,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
+
+    console.log(`[DRM PROXY] Response status: ${response.status}`);
+    res.status(response.status);
+    res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
+    res.send(response.data);
+  } catch (err) {
+    console.error('[DRM PROXY ERROR]', err.message);
+    res.status(502).json({ error: 'DRM proxy failed', detail: err.message });
+  }
+});
+
 // tabii API Proxy
 app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async (req, res) => {
   let pathAfterDomain = req.path;
   if (req.path.startsWith('/eu1/')) {
     pathAfterDomain = req.path.replace(/^\/eu1/, '');
   }
-  const targetUrl = 'https://eu1.tabii.com' + pathAfterDomain + (req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '');
+  // Strip our cache-buster param (_cb) before forwarding to upstream
+  let rawQuery = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  rawQuery = rawQuery.replace(/[?&]_cb=[^&]*/g, '').replace(/^&/, '?');
+  const targetUrl = 'https://eu1.tabii.com' + pathAfterDomain + rawQuery;
 
   // Intercept profile token request to bypass 401 error
   if (req.method === 'POST' && pathAfterDomain.match(/\/apigateway\/profiles\/v2\/[^\/]+\/token/)) {

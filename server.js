@@ -247,18 +247,30 @@ app.get('/_proxy/polyfills.js', (req, res) => {
   res.send(combined);
 });
 
-// Image Proxy to avoid CORS/SSL issues on older TVs
+// Image Proxy to avoid CORS/SSL issues on older TVs with memory optimizations
 app.get('/_proxy/image/:name', async (req, res) => {
-  const imageUrl = `https://cms-tabii-public-image.tabii.com/int/${req.params.name}`;
+  const width = req.query.w || '300';
+  const optimizedUrl = `https://cms-tabii-public-image.tabii.com/int/webp/w${width}/q60/${req.params.name}`;
+  const rawUrl = `https://cms-tabii-public-image.tabii.com/int/${req.params.name}`;
+  
   try {
-    const response = await axios.get(imageUrl, {
+    const response = await axios.get(optimizedUrl, {
       responseType: 'stream',
       headers: { 'User-Agent': PC_USER_AGENT }
     });
-    res.setHeader('Content-Type', response.headers['content-type']);
+    res.setHeader('Content-Type', 'image/webp');
     response.data.pipe(res);
   } catch (err) {
-    res.sendStatus(404);
+    try {
+      const response = await axios.get(rawUrl, {
+        responseType: 'stream',
+        headers: { 'User-Agent': PC_USER_AGENT }
+      });
+      res.setHeader('Content-Type', response.headers['content-type'] || 'image/jpeg');
+      response.data.pipe(res);
+    } catch (rawErr) {
+      res.sendStatus(404);
+    }
   }
 });
 

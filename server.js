@@ -27,6 +27,7 @@ const PC_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537
 // Global Session Stores for TV Pairing
 const activeSessions = {}; // session_id -> { accessToken, refreshToken, timestamp }
 const pendingActivations = {}; // 6-digit-code -> { status, accessToken, refreshToken, timestamp }
+let registeredLocalProxyUrl = null; // Local tunnel URL (for passing DRM Widevine requests to residential IP)
 
 // Dynamic buildId parsing
 let currentBuildId = '10.07.2026-07.44.16';
@@ -434,15 +435,39 @@ app.post(['/activate', '/*/activate'], express.urlencoded({ extended: true }), (
   `);
 });
 
+// Dynamic registration of local proxy for cloud-to-local DRM routing
+app.get('/_proxy/register-local', (req, res) => {
+  const url = req.query.url;
+  if (url) {
+    registeredLocalProxyUrl = url.replace(/\/$/, '');
+    console.log(`[PROXY REGISTRATION] Registered local proxy URL: ${registeredLocalProxyUrl}`);
+    return res.json({ success: true, registeredUrl: registeredLocalProxyUrl });
+  }
+  return res.status(400).json({ error: 'Missing url parameter' });
+});
+
 // ── DRM PROXY (binary passthrough – MUST be before general API proxy) ────────
 app.all(['/eu1/apigateway/drm/*', '/apigateway/drm/*'], async (req, res) => {
   let pathAfterDomain = req.path.startsWith('/eu1/') ? req.path.replace(/^\/eu1/, '') : req.path;
   // Strip cache-buster so the real backend doesn't reject the ticket
   const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')).replace(/[?&]_cb=[^&]*/g, '').replace(/^&/, '?') : '';
-  const targetUrl = 'https://eu1.tabii.com' + pathAfterDomain + queryString;
+  
+  let targetUrl;
+  let useLocalProxy = false;
+  
+  // If we are running in the cloud (not on user's local network/localhost) and have a registered local proxy, route the DRM challenge to it.
+  const host = req.headers.host || '';
+  if (registeredLocalProxyUrl && !host.includes('localhost') && !host.includes('127.0.0.1') && !host.includes('192.168.')) {
+    // Forward directly to the local tunnel URL (ngrok)
+    targetUrl = registeredLocalProxyUrl + (req.path.startsWith('/eu1/') ? req.path : '/eu1' + req.path) + queryString;
+    useLocalProxy = true;
+    console.log(`[DRM PROXY] Routing cloud DRM request to local residential proxy: ${targetUrl}`);
+  } else {
+    targetUrl = 'https://eu1.tabii.com' + pathAfterDomain + queryString;
+  }
 
   const headers = {
-    'host': 'eu1.tabii.com',
+    'host': useLocalProxy ? new URL(registeredLocalProxyUrl).host : 'eu1.tabii.com',
     'origin': 'https://www.tabii.com',
     'referer': 'https://www.tabii.com/',
     'user-agent': PC_USER_AGENT,
@@ -452,7 +477,7 @@ app.all(['/eu1/apigateway/drm/*', '/apigateway/drm/*'], async (req, res) => {
   if (req.headers.authorization) headers['authorization'] = req.headers.authorization;
   if (req.headers['app-version']) headers['app-version'] = req.headers['app-version'];
 
-  console.log(`[DRM PROXY] ${req.method} ${req.path} -> ${targetUrl}`);
+  console.log(`[DRM PROXY] ${req.method} ${req.path} -> ${targetUrl} (local proxy: ${useLocalProxy})`);
 
   try {
     const response = await axios({

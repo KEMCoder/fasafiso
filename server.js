@@ -28,6 +28,7 @@ const PC_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537
 const activeSessions = {}; // session_id -> { accessToken, refreshToken, timestamp }
 const pendingActivations = {}; // 6-digit-code -> { status, accessToken, refreshToken, timestamp }
 let registeredLocalProxyUrl = null; // Local tunnel URL (for passing DRM Widevine requests to residential IP)
+let registeredLocalIp = null; // Local PC IP address (for direct LAN DRM requests from TV)
 
 // Dynamic buildId parsing
 let currentBuildId = '10.07.2026-07.44.16';
@@ -444,6 +445,21 @@ app.get('/_proxy/register-local', (req, res) => {
     return res.json({ success: true, registeredUrl: registeredLocalProxyUrl });
   }
   return res.status(400).json({ error: 'Missing url parameter' });
+});
+
+// Dynamic registration of local PC IP address for direct LAN DRM routing
+app.get('/_proxy/register-local-ip', (req, res) => {
+  const ip = req.query.ip;
+  if (ip) {
+    registeredLocalIp = ip.trim();
+    console.log(`[IP REGISTRATION] Registered local PC IP: ${registeredLocalIp}`);
+    return res.json({ success: true, registeredIp: registeredLocalIp });
+  }
+  return res.status(400).json({ error: 'Missing ip parameter' });
+});
+
+app.get('/_proxy/get-local-ip', (req, res) => {
+  res.json({ ip: registeredLocalIp });
 });
 
 // ── DRM PROXY (binary passthrough – MUST be before general API proxy) ────────

@@ -239,8 +239,6 @@ app.get('/_proxy/polyfills.js', (req, res) => {
         };
       }
 
-      win.exports = win.exports || {};
-      win.module = win.module || { exports: win.exports };
       console.log("ES5 core polyfills loaded successfully.");
     })(window);
   `;

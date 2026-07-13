@@ -606,9 +606,10 @@ app.all(['/eu1/*', '/apigateway/*', '/cw-writer/*', '/watching-device/*'], async
       console.log(`[PROXY /token PAYLOAD]`, decodedJson);
     }
 
-    // Auto-clear invalid session cookies on 401
-    if (response.status === 401 || (decodedJson && decodedJson.errorCode === 'invalidSession')) {
-      console.log(`[PROXY AUTO-LOGOUT] Detected invalid session. Clearing proxy cookies.`);
+    // Auto-clear invalid session cookies on 401 ONLY for critical auth endpoints
+    if ((req.path.includes('/auth/v2/me') || req.path.includes('/token/refresh') || req.path.includes('/token')) && 
+        (response.status === 401 || (decodedJson && decodedJson.errorCode === 'invalidSession'))) {
+      console.log(`[PROXY AUTO-LOGOUT] Detected invalid session on ${req.path}. Clearing proxy cookies.`);
       res.clearCookie('token');
       res.clearCookie('session');
       res.clearCookie('proxy_session_id');
